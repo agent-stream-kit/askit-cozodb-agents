@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
-use std::vec;
 
 use agent_stream_kit::{
-    ASKit, Agent, AgentConfigs, AgentContext, AgentDefinition, AgentError, AgentOutput, AgentValue,
-    AsAgent, AsAgentData, async_trait, new_agent_boxed,
+    ASKit, Agent, AgentConfigs, AgentContext, AgentError, AgentOutput, AgentValue, AsAgent,
+    AsAgentData, async_trait,
 };
+use askit_macros::askit_agent;
 use cozo::DbInstance;
 
 static DB_MAP: OnceLock<Mutex<BTreeMap<String, DbInstance>>> = OnceLock::new();
@@ -30,7 +30,23 @@ fn get_db_instance(path: &str) -> Result<DbInstance, AgentError> {
     Ok(db)
 }
 
+static CATEGORY: &str = "CozoDB";
+
+static PORT_PARAMS: &str = "params";
+static PORT_RESULT: &str = "result";
+
+static CONFIG_DB: &str = "db";
+static CONFIG_SCRIPT: &str = "script";
+
 // CozoDB Script
+#[askit_agent(
+    title = "CozoDB Script",
+    category = CATEGORY,
+    inputs = [PORT_PARAMS],
+    outputs = [PORT_RESULT],
+    string_config(name = CONFIG_DB, title = "Database"),
+    text_config(name = CONFIG_SCRIPT, title = "Script")
+)]
 struct CozoDbScriptAgent {
     data: AsAgentData,
 }
@@ -86,29 +102,4 @@ impl AsAgent for CozoDbScriptAgent {
 
         self.try_output(ctx, PORT_RESULT, value)
     }
-}
-
-static AGENT_KIND: &str = "agent";
-static CATEGORY: &str = "Database";
-
-static PORT_PARAMS: &str = "params";
-static PORT_RESULT: &str = "result";
-
-static CONFIG_DB: &str = "db";
-static CONFIG_SCRIPT: &str = "script";
-
-pub fn register_agents(askit: &ASKit) {
-    askit.register_agent(
-        AgentDefinition::new(
-            AGENT_KIND,
-            "cozodb_script",
-            Some(new_agent_boxed::<CozoDbScriptAgent>),
-        )
-        .title("CozoDB Script")
-        .category(CATEGORY)
-        .inputs(vec![PORT_PARAMS])
-        .outputs(vec![PORT_RESULT])
-        .string_config_with(CONFIG_DB, "", |entry| entry.title("Database"))
-        .text_config_with(CONFIG_SCRIPT, "", |entry| entry.title("Script")),
-    );
 }
