@@ -5,7 +5,7 @@ use agent_stream_kit::{
     ASKit, Agent, AgentContext, AgentData, AgentError, AgentOutput, AgentSpec, AgentValue, AsAgent,
     askit_agent, async_trait,
 };
-use cozo::DbInstance;
+use cozo::{DataValue, DbInstance, JsonData, NamedRows, Num, UuidWrapper, Vector};
 
 static DB_MAP: OnceLock<Mutex<BTreeMap<String, DbInstance>>> = OnceLock::new();
 
@@ -29,6 +29,96 @@ fn get_db_instance(path: &str) -> Result<DbInstance, AgentError> {
     Ok(db)
 }
 
+fn data_value_to_agent_value(value: DataValue) -> AgentValue {
+    match value {
+        DataValue::Null => AgentValue::unit(),
+        DataValue::Bool(b) => AgentValue::boolean(b),
+        DataValue::Num(Num::Int(i)) => AgentValue::integer(i),
+        DataValue::Num(Num::Float(f)) => AgentValue::number(f),
+        DataValue::Str(s) => AgentValue::string(s.to_string()),
+        DataValue::Bytes(bytes) => {
+            let arr = bytes
+                .into_iter()
+                .map(|b| AgentValue::integer(b as i64))
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Uuid(UuidWrapper(uuid)) => AgentValue::string(uuid.to_string()),
+        DataValue::Regex(rx) => AgentValue::string(rx.0.as_str().to_string()),
+        DataValue::List(list) => {
+            let arr = list
+                .into_iter()
+                .map(data_value_to_agent_value)
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Set(set) => {
+            let arr = set
+                .into_iter()
+                .map(data_value_to_agent_value)
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Vec(vec) => {
+            let values = match vec {
+                Vector::F32(arr) => arr
+                    .iter()
+                    .map(|v| AgentValue::number(*v as f64))
+                    .collect::<Vec<_>>(),
+                Vector::F64(arr) => arr.iter().map(|v| AgentValue::number(*v)).collect::<Vec<_>>(),
+            };
+            AgentValue::array(values)
+        }
+        DataValue::Json(JsonData(json)) => {
+            let json_string = json.to_string();
+            let inner =
+                AgentValue::from_json(json).unwrap_or_else(|_| AgentValue::string(json_string));
+            inner
+        }
+        DataValue::Validity(v) => AgentValue::object(
+            [
+                (
+                    "timestamp".to_string(),
+                    AgentValue::integer(v.timestamp.0.0),
+                ),
+                ("is_assert".to_string(), AgentValue::boolean(v.is_assert.0)),
+            ]
+            .into(),
+        ),
+        DataValue::Bot => AgentValue::unit(),
+    }
+}
+
+fn named_rows_to_agent_value(named_rows: NamedRows) -> AgentValue {
+    let NamedRows {
+        headers,
+        rows,
+        next,
+    } = named_rows;
+    let headers_value = AgentValue::array(headers.into_iter().map(AgentValue::string).collect());
+
+    let row_values: Vec<AgentValue> = rows
+        .into_iter()
+        .map(|row| {
+            let cells: Vec<AgentValue> = row.into_iter().map(data_value_to_agent_value).collect();
+            AgentValue::array(cells)
+        })
+        .collect();
+
+    let rows_value = AgentValue::array(row_values);
+    let next_value = next
+        .map(|n| named_rows_to_agent_value(*n))
+        .unwrap_or_else(AgentValue::unit);
+
+    AgentValue::object(
+        [
+            ("headers".to_string(), headers_value),
+            ("rows".to_string(), rows_value),
+            ("next".to_string(), next_value),
+        ]
+        .into(),
+    )
+}
 static CATEGORY: &str = "CozoDB";
 
 static PORT_PARAMS: &str = "params";
@@ -84,8 +174,157 @@ impl AsAgent for CozoDbScriptAgent {
             .run_script(&script, params, cozo::ScriptMutability::Mutable)
             .map_err(|e| AgentError::IoError(format!("Cozo Error: {}", e)))?;
 
-        let value = AgentValue::from_serialize(&result)?;
+        let value = named_rows_to_agent_value(result);
 
         self.try_output(ctx, PORT_RESULT, value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Reverse;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn test_data_value_to_agent_value_primitives() {
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Null),
+            AgentValue::unit()
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Bool(true)),
+            AgentValue::boolean(true)
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Num(Num::Int(42))),
+            AgentValue::integer(42)
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Num(Num::Float(3.5))),
+            AgentValue::number(3.5)
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::from("hello")),
+            AgentValue::string("hello")
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Bytes(vec![0, 255])),
+            AgentValue::array(vec![AgentValue::integer(0), AgentValue::integer(255)])
+        );
+
+        let validity = cozo::Validity {
+            timestamp: cozo::ValidityTs(Reverse(123)),
+            is_assert: Reverse(true),
+        };
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Validity(validity)),
+            AgentValue::object(
+                [
+                    ("timestamp".to_string(), AgentValue::integer(123)),
+                    ("is_assert".to_string(), AgentValue::boolean(true)),
+                ]
+                .into()
+            )
+        );
+        assert_eq!(
+            data_value_to_agent_value(DataValue::Bot),
+            AgentValue::unit()
+        );
+    }
+
+    #[test]
+    fn test_data_value_to_agent_value_nested() {
+        let list = DataValue::List(vec![
+            DataValue::Num(Num::Int(1)),
+            DataValue::from("x"),
+            DataValue::Null,
+        ]);
+        assert_eq!(
+            data_value_to_agent_value(list),
+            AgentValue::array(vec![
+                AgentValue::integer(1),
+                AgentValue::string("x"),
+                AgentValue::unit()
+            ])
+        );
+
+        let set = DataValue::Set(BTreeSet::from([
+            DataValue::Num(Num::Int(2)),
+            DataValue::Num(Num::Int(1)),
+        ]));
+        assert_eq!(
+            data_value_to_agent_value(set),
+            AgentValue::array(vec![AgentValue::integer(1), AgentValue::integer(2)])
+        );
+
+        let json_value = serde_json::json!({"a": 1, "b": [true, null]});
+        let json_dv = DataValue::from(json_value);
+        assert_eq!(
+            data_value_to_agent_value(json_dv),
+            AgentValue::object(
+                [
+                    ("a".to_string(), AgentValue::integer(1)),
+                    (
+                        "b".to_string(),
+                        AgentValue::array(vec![AgentValue::boolean(true), AgentValue::unit()])
+                    )
+                ]
+                .into()
+            )
+        );
+    }
+
+    #[test]
+    fn test_named_rows_to_agent_value() {
+        let next = NamedRows::new(
+            vec!["n".to_string()],
+            vec![vec![DataValue::Num(Num::Int(2))]],
+        );
+
+        let rows = NamedRows {
+            headers: vec!["a".to_string(), "b".to_string()],
+            rows: vec![vec![DataValue::Num(Num::Int(1)), DataValue::from("x")]],
+            next: Some(Box::new(next)),
+        };
+
+        assert_eq!(
+            named_rows_to_agent_value(rows),
+            AgentValue::object(
+                [
+                    (
+                        "headers".to_string(),
+                        AgentValue::array(vec![AgentValue::string("a"), AgentValue::string("b")])
+                    ),
+                    (
+                        "rows".to_string(),
+                        AgentValue::array(vec![AgentValue::array(vec![
+                            AgentValue::integer(1),
+                            AgentValue::string("x")
+                        ])])
+                    ),
+                    (
+                        "next".to_string(),
+                        AgentValue::object(
+                            [
+                                (
+                                    "headers".to_string(),
+                                    AgentValue::array(vec![AgentValue::string("n")])
+                                ),
+                                (
+                                    "rows".to_string(),
+                                    AgentValue::array(vec![AgentValue::array(vec![
+                                        AgentValue::integer(2)
+                                    ])])
+                                ),
+                                ("next".to_string(), AgentValue::unit())
+                            ]
+                            .into()
+                        )
+                    )
+                ]
+                .into()
+            )
+        );
     }
 }
