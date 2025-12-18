@@ -9,116 +9,6 @@ use cozo::{DataValue, DbInstance, JsonData, NamedRows, Num, UuidWrapper, Vector}
 
 static DB_MAP: OnceLock<Mutex<BTreeMap<String, DbInstance>>> = OnceLock::new();
 
-fn get_db_instance(path: &str) -> Result<DbInstance, AgentError> {
-    let db_map = DB_MAP.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut map_guard = db_map.lock().unwrap();
-
-    if let Some(db) = map_guard.get(path) {
-        return Ok(db.clone());
-    }
-
-    let db = if path.is_empty() {
-        DbInstance::new("mem", "", "")
-    } else {
-        DbInstance::new("sqlite", path, "")
-    }
-    .map_err(|e| AgentError::IoError(format!("Cozo Error: {}", e)))?;
-
-    map_guard.insert(path.to_string(), db.clone());
-
-    Ok(db)
-}
-
-fn data_value_to_agent_value(value: DataValue) -> AgentValue {
-    match value {
-        DataValue::Null => AgentValue::unit(),
-        DataValue::Bool(b) => AgentValue::boolean(b),
-        DataValue::Num(Num::Int(i)) => AgentValue::integer(i),
-        DataValue::Num(Num::Float(f)) => AgentValue::number(f),
-        DataValue::Str(s) => AgentValue::string(s.to_string()),
-        DataValue::Bytes(bytes) => {
-            let arr = bytes
-                .into_iter()
-                .map(|b| AgentValue::integer(b as i64))
-                .collect::<Vec<_>>();
-            AgentValue::array(arr)
-        }
-        DataValue::Uuid(UuidWrapper(uuid)) => AgentValue::string(uuid.to_string()),
-        DataValue::Regex(rx) => AgentValue::string(rx.0.as_str().to_string()),
-        DataValue::List(list) => {
-            let arr = list
-                .into_iter()
-                .map(data_value_to_agent_value)
-                .collect::<Vec<_>>();
-            AgentValue::array(arr)
-        }
-        DataValue::Set(set) => {
-            let arr = set
-                .into_iter()
-                .map(data_value_to_agent_value)
-                .collect::<Vec<_>>();
-            AgentValue::array(arr)
-        }
-        DataValue::Vec(vec) => {
-            let values = match vec {
-                Vector::F32(arr) => arr
-                    .iter()
-                    .map(|v| AgentValue::number(*v as f64))
-                    .collect::<Vec<_>>(),
-                Vector::F64(arr) => arr.iter().map(|v| AgentValue::number(*v)).collect::<Vec<_>>(),
-            };
-            AgentValue::array(values)
-        }
-        DataValue::Json(JsonData(json)) => {
-            let json_string = json.to_string();
-            let inner =
-                AgentValue::from_json(json).unwrap_or_else(|_| AgentValue::string(json_string));
-            inner
-        }
-        DataValue::Validity(v) => AgentValue::object(
-            [
-                (
-                    "timestamp".to_string(),
-                    AgentValue::integer(v.timestamp.0.0),
-                ),
-                ("is_assert".to_string(), AgentValue::boolean(v.is_assert.0)),
-            ]
-            .into(),
-        ),
-        DataValue::Bot => AgentValue::unit(),
-    }
-}
-
-fn named_rows_to_agent_value(named_rows: NamedRows) -> AgentValue {
-    let NamedRows {
-        headers,
-        rows,
-        next,
-    } = named_rows;
-    let headers_value = AgentValue::array(headers.into_iter().map(AgentValue::string).collect());
-
-    let row_values: Vec<AgentValue> = rows
-        .into_iter()
-        .map(|row| {
-            let cells: Vec<AgentValue> = row.into_iter().map(data_value_to_agent_value).collect();
-            AgentValue::array(cells)
-        })
-        .collect();
-
-    let rows_value = AgentValue::array(row_values);
-    let next_value = next
-        .map(|n| named_rows_to_agent_value(*n))
-        .unwrap_or_else(AgentValue::unit);
-
-    AgentValue::object(
-        [
-            ("headers".to_string(), headers_value),
-            ("rows".to_string(), rows_value),
-            ("next".to_string(), next_value),
-        ]
-        .into(),
-    )
-}
 static CATEGORY: &str = "CozoDB";
 
 static PORT_PARAMS: &str = "params";
@@ -180,6 +70,119 @@ impl AsAgent for CozoDbScriptAgent {
     }
 }
 
+fn get_db_instance(path: &str) -> Result<DbInstance, AgentError> {
+    let db_map = DB_MAP.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut map_guard = db_map.lock().unwrap();
+
+    if let Some(db) = map_guard.get(path) {
+        return Ok(db.clone());
+    }
+
+    let db = if path.is_empty() {
+        DbInstance::new("mem", "", "")
+    } else {
+        DbInstance::new("sqlite", path, "")
+    }
+    .map_err(|e| AgentError::IoError(format!("Cozo Error: {}", e)))?;
+
+    map_guard.insert(path.to_string(), db.clone());
+
+    Ok(db)
+}
+
+fn data_value_to_agent_value(value: DataValue) -> AgentValue {
+    match value {
+        DataValue::Null => AgentValue::unit(),
+        DataValue::Bool(b) => AgentValue::boolean(b),
+        DataValue::Num(Num::Int(i)) => AgentValue::integer(i),
+        DataValue::Num(Num::Float(f)) => AgentValue::number(f),
+        DataValue::Str(s) => AgentValue::string(s.to_string()),
+        DataValue::Bytes(bytes) => {
+            let arr = bytes
+                .into_iter()
+                .map(|b| AgentValue::integer(b as i64))
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Uuid(UuidWrapper(uuid)) => AgentValue::string(uuid.to_string()),
+        DataValue::Regex(rx) => AgentValue::string(rx.0.as_str().to_string()),
+        DataValue::List(list) => {
+            let arr = list
+                .into_iter()
+                .map(data_value_to_agent_value)
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Set(set) => {
+            let arr = set
+                .into_iter()
+                .map(data_value_to_agent_value)
+                .collect::<Vec<_>>();
+            AgentValue::array(arr)
+        }
+        DataValue::Vec(vec) => {
+            let values = match vec {
+                Vector::F32(arr) => arr
+                    .iter()
+                    .map(|v| AgentValue::number(*v as f64))
+                    .collect::<Vec<_>>(),
+                Vector::F64(arr) => arr
+                    .iter()
+                    .map(|v| AgentValue::number(*v))
+                    .collect::<Vec<_>>(),
+            };
+            AgentValue::array(values)
+        }
+        DataValue::Json(JsonData(json)) => {
+            let json_string = json.to_string();
+            let inner =
+                AgentValue::from_json(json).unwrap_or_else(|_| AgentValue::string(json_string));
+            inner
+        }
+        DataValue::Validity(v) => AgentValue::object(
+            [
+                (
+                    "timestamp".to_string(),
+                    AgentValue::integer(v.timestamp.0.0),
+                ),
+                ("is_assert".to_string(), AgentValue::boolean(v.is_assert.0)),
+            ]
+            .into(),
+        ),
+        DataValue::Bot => AgentValue::unit(),
+    }
+}
+
+fn named_rows_to_agent_value(named_rows: NamedRows) -> AgentValue {
+    let NamedRows {
+        headers,
+        rows,
+        next,
+    } = named_rows;
+    let headers_value = AgentValue::array(headers.into_iter().map(AgentValue::string).collect());
+
+    let row_values: Vec<AgentValue> = rows
+        .into_iter()
+        .map(|row| {
+            let cells: Vec<AgentValue> = row.into_iter().map(data_value_to_agent_value).collect();
+            AgentValue::array(cells)
+        })
+        .collect();
+
+    let rows_value = AgentValue::array(row_values);
+    let next_value = next
+        .map(|n| named_rows_to_agent_value(*n))
+        .unwrap_or_else(AgentValue::unit);
+
+    AgentValue::object(
+        [
+            ("headers".to_string(), headers_value),
+            ("rows".to_string(), rows_value),
+            ("next".to_string(), next_value),
+        ]
+        .into(),
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
