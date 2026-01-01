@@ -270,17 +270,11 @@ fn data_value_to_agent_value(value: DataValue) -> AgentValue {
             AgentValue::array(arr)
         }
         DataValue::Vec(vec) => {
-            let values = match vec {
-                Vector::F32(arr) => arr
-                    .iter()
-                    .map(|v| AgentValue::number(*v as f64))
-                    .collect::<im::Vector<_>>(),
-                Vector::F64(arr) => arr
-                    .iter()
-                    .map(|v| AgentValue::number(*v))
-                    .collect::<im::Vector<_>>(),
+            let v = match vec {
+                Vector::F32(arr) => arr.to_vec(),
+                Vector::F64(arr) => arr.iter().map(|&v| v as f32).collect(),
             };
-            AgentValue::array(values)
+            AgentValue::tensor(v)
         }
         DataValue::Json(JsonData(json)) => {
             let json_string = json.to_string();

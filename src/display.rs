@@ -77,6 +77,34 @@ fn cozo_cell_to_text(value: &AgentValue) -> String {
             format!("[{}]", rendered.join(", "))
         }
         AgentValue::Object(_) => serde_json::to_string(&value.to_json()).unwrap_or_default(),
+        AgentValue::Tensor(t) => {
+            // show only the first and last several elements of the tensor, if large.
+            let size = t.len();
+            let elements_to_show = 5;
+            let mut rendered: Vec<String> = Vec::new();
+            if size <= 2 * elements_to_show {
+                for v in t.iter() {
+                    rendered.push(v.to_string());
+                }
+                format!("[{}]", rendered.join(", "))
+            } else {
+                for v in t.iter().take(elements_to_show) {
+                    rendered.push(v.to_string());
+                }
+                rendered.push("...".to_string());
+                for v in t
+                    .iter()
+                    .rev()
+                    .take(elements_to_show)
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .rev()
+                {
+                    rendered.push(v.to_string());
+                }
+                format!("[{}, size = {}]", rendered.join(", "), size)
+            }
+        }
         _ => serde_json::to_string(&value.to_json()).unwrap_or_default(),
     }
 }
