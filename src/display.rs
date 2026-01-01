@@ -40,8 +40,8 @@ impl AsAgent for DisplayTableAgent {
         _pin: String,
         value: AgentValue,
     ) -> Result<(), AgentError> {
-        let headers = value.get_array("headers").cloned();
-        let rows = value.get_array("rows").cloned();
+        let headers = value.get_array("headers");
+        let rows = value.get_array("rows");
 
         let table_html = generate_html_table(headers, rows);
 
@@ -77,11 +77,42 @@ fn cozo_cell_to_text(value: &AgentValue) -> String {
             format!("[{}]", rendered.join(", "))
         }
         AgentValue::Object(_) => serde_json::to_string(&value.to_json()).unwrap_or_default(),
+        AgentValue::Tensor(t) => {
+            // show only the first and last several elements of the tensor, if large.
+            let size = t.len();
+            let elements_to_show = 5;
+            let mut rendered: Vec<String> = Vec::new();
+            if size <= 2 * elements_to_show {
+                for v in t.iter() {
+                    rendered.push(v.to_string());
+                }
+                format!("[{}]", rendered.join(", "))
+            } else {
+                for v in t.iter().take(elements_to_show) {
+                    rendered.push(v.to_string());
+                }
+                rendered.push("...".to_string());
+                for v in t
+                    .iter()
+                    .rev()
+                    .take(elements_to_show)
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .rev()
+                {
+                    rendered.push(v.to_string());
+                }
+                format!("[{}, size = {}]", rendered.join(", "), size)
+            }
+        }
         _ => serde_json::to_string(&value.to_json()).unwrap_or_default(),
     }
 }
 
-fn generate_html_table(headers: Option<Vec<AgentValue>>, rows: Option<Vec<AgentValue>>) -> String {
+fn generate_html_table(
+    headers: Option<&im::Vector<AgentValue>>,
+    rows: Option<&im::Vector<AgentValue>>,
+) -> String {
     let mut html = String::new();
     html.push_str("<table border=\"1\" style=\"border-collapse:collapse;\">\n");
     if let Some(headers) = headers {
