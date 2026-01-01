@@ -6,6 +6,7 @@ use agent_stream_kit::{
     askit_agent, async_trait,
 };
 use cozo::{DataValue, DbInstance, JsonData, NamedRows, Num, UuidWrapper, Vector};
+use im::hashmap;
 
 static DB_MAP: OnceLock<Mutex<BTreeMap<String, DbInstance>>> = OnceLock::new();
 
@@ -217,7 +218,7 @@ impl AsAgent for SelectAgent {
                 let row_array = row
                     .as_array()
                     .ok_or_else(|| AgentError::InvalidValue("Row is not an array".to_string()))?;
-                let selected_cells: Vec<AgentValue> = col_indices
+                let selected_cells: im::Vector<AgentValue> = col_indices
                     .iter()
                     .map(|&i| {
                         row_array
@@ -228,7 +229,7 @@ impl AsAgent for SelectAgent {
                     .collect();
                 Ok(AgentValue::array(selected_cells))
             })
-            .collect::<Result<Vec<AgentValue>, AgentError>>()?;
+            .collect::<Result<im::Vector<AgentValue>, AgentError>>()?;
 
         if arr.len() == 1 {
             self.try_output(ctx, PORT_ARRAY, arr[0].clone())
@@ -249,7 +250,7 @@ fn data_value_to_agent_value(value: DataValue) -> AgentValue {
             let arr = bytes
                 .into_iter()
                 .map(|b| AgentValue::integer(b as i64))
-                .collect::<Vec<_>>();
+                .collect::<im::Vector<_>>();
             AgentValue::array(arr)
         }
         DataValue::Uuid(UuidWrapper(uuid)) => AgentValue::string(uuid.to_string()),
@@ -258,14 +259,14 @@ fn data_value_to_agent_value(value: DataValue) -> AgentValue {
             let arr = list
                 .into_iter()
                 .map(data_value_to_agent_value)
-                .collect::<Vec<_>>();
+                .collect::<im::Vector<_>>();
             AgentValue::array(arr)
         }
         DataValue::Set(set) => {
             let arr = set
                 .into_iter()
                 .map(data_value_to_agent_value)
-                .collect::<Vec<_>>();
+                .collect::<im::Vector<_>>();
             AgentValue::array(arr)
         }
         DataValue::Vec(vec) => {
@@ -273,11 +274,11 @@ fn data_value_to_agent_value(value: DataValue) -> AgentValue {
                 Vector::F32(arr) => arr
                     .iter()
                     .map(|v| AgentValue::number(*v as f64))
-                    .collect::<Vec<_>>(),
+                    .collect::<im::Vector<_>>(),
                 Vector::F64(arr) => arr
                     .iter()
                     .map(|v| AgentValue::number(*v))
-                    .collect::<Vec<_>>(),
+                    .collect::<im::Vector<_>>(),
             };
             AgentValue::array(values)
         }
@@ -287,16 +288,11 @@ fn data_value_to_agent_value(value: DataValue) -> AgentValue {
                 AgentValue::from_json(json).unwrap_or_else(|_| AgentValue::string(json_string));
             inner
         }
-        DataValue::Validity(v) => AgentValue::object(
-            [
-                (
-                    "timestamp".to_string(),
-                    AgentValue::integer(v.timestamp.0.0),
-                ),
-                ("is_assert".to_string(), AgentValue::boolean(v.is_assert.0)),
-            ]
-            .into(),
-        ),
+        DataValue::Validity(v) => AgentValue::object(hashmap! {
+                "timestamp".into() =>
+                AgentValue::integer(v.timestamp.0.0),
+            "is_assert".into() => AgentValue::boolean(v.is_assert.0),
+        }),
         DataValue::Bot => AgentValue::unit(),
     }
 }
@@ -309,10 +305,11 @@ fn named_rows_to_agent_value(named_rows: NamedRows) -> AgentValue {
     } = named_rows;
     let headers_value = AgentValue::array(headers.into_iter().map(AgentValue::string).collect());
 
-    let row_values: Vec<AgentValue> = rows
+    let row_values: im::Vector<AgentValue> = rows
         .into_iter()
         .map(|row| {
-            let cells: Vec<AgentValue> = row.into_iter().map(data_value_to_agent_value).collect();
+            let cells: im::Vector<AgentValue> =
+                row.into_iter().map(data_value_to_agent_value).collect();
             AgentValue::array(cells)
         })
         .collect();
@@ -322,17 +319,17 @@ fn named_rows_to_agent_value(named_rows: NamedRows) -> AgentValue {
         .map(|n| named_rows_to_agent_value(*n))
         .unwrap_or_else(AgentValue::unit);
 
-    AgentValue::object(
-        [
-            ("headers".to_string(), headers_value),
-            ("rows".to_string(), rows_value),
-            ("next".to_string(), next_value),
-        ]
-        .into(),
-    )
+    AgentValue::object(hashmap! {
+        "headers".into() => headers_value,
+        "rows".into() => rows_value,
+        "next".into() => next_value,
+    })
 }
+
 #[cfg(test)]
 mod tests {
+    use im::vector;
+
     use super::*;
     use std::cmp::Reverse;
     use std::collections::BTreeSet;
@@ -361,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             data_value_to_agent_value(DataValue::Bytes(vec![0, 255])),
-            AgentValue::array(vec![AgentValue::integer(0), AgentValue::integer(255)])
+            AgentValue::array(vector![AgentValue::integer(0), AgentValue::integer(255)])
         );
 
         let validity = cozo::Validity {
@@ -370,13 +367,10 @@ mod tests {
         };
         assert_eq!(
             data_value_to_agent_value(DataValue::Validity(validity)),
-            AgentValue::object(
-                [
-                    ("timestamp".to_string(), AgentValue::integer(123)),
-                    ("is_assert".to_string(), AgentValue::boolean(true)),
-                ]
-                .into()
-            )
+            AgentValue::object(hashmap! {
+                "timestamp".into() => AgentValue::integer(123),
+                "is_assert".into() => AgentValue::boolean(true),
+            })
         );
         assert_eq!(
             data_value_to_agent_value(DataValue::Bot),
@@ -393,7 +387,7 @@ mod tests {
         ]);
         assert_eq!(
             data_value_to_agent_value(list),
-            AgentValue::array(vec![
+            AgentValue::array(vector![
                 AgentValue::integer(1),
                 AgentValue::string("x"),
                 AgentValue::unit()
@@ -406,23 +400,20 @@ mod tests {
         ]));
         assert_eq!(
             data_value_to_agent_value(set),
-            AgentValue::array(vec![AgentValue::integer(1), AgentValue::integer(2)])
+            AgentValue::array(vector![AgentValue::integer(1), AgentValue::integer(2)])
         );
 
         let json_value = serde_json::json!({"a": 1, "b": [true, null]});
         let json_dv = DataValue::from(json_value);
         assert_eq!(
             data_value_to_agent_value(json_dv),
-            AgentValue::object(
-                [
-                    ("a".to_string(), AgentValue::integer(1)),
-                    (
-                        "b".to_string(),
-                        AgentValue::array(vec![AgentValue::boolean(true), AgentValue::unit()])
-                    )
-                ]
-                .into()
-            )
+            AgentValue::object(hashmap! {
+                "a".into() => AgentValue::integer(1),
+                    "b".into() => AgentValue::array(vector![
+                        AgentValue::boolean(true),
+                        AgentValue::unit()
+                    ]),
+            })
         );
     }
 
@@ -441,41 +432,22 @@ mod tests {
 
         assert_eq!(
             named_rows_to_agent_value(rows),
-            AgentValue::object(
-                [
-                    (
-                        "headers".to_string(),
-                        AgentValue::array(vec![AgentValue::string("a"), AgentValue::string("b")])
-                    ),
-                    (
-                        "rows".to_string(),
-                        AgentValue::array(vec![AgentValue::array(vec![
-                            AgentValue::integer(1),
-                            AgentValue::string("x")
-                        ])])
-                    ),
-                    (
-                        "next".to_string(),
-                        AgentValue::object(
-                            [
-                                (
-                                    "headers".to_string(),
-                                    AgentValue::array(vec![AgentValue::string("n")])
-                                ),
-                                (
-                                    "rows".to_string(),
-                                    AgentValue::array(vec![AgentValue::array(vec![
-                                        AgentValue::integer(2)
-                                    ])])
-                                ),
-                                ("next".to_string(), AgentValue::unit())
-                            ]
-                            .into()
-                        )
-                    )
-                ]
-                .into()
-            )
+            AgentValue::object(hashmap! {
+                "headers".into() => AgentValue::array(vector![AgentValue::string("a"), AgentValue::string("b")]),
+                "rows".into() => AgentValue::array(vector![
+                    AgentValue::array(vector![
+                        AgentValue::integer(1),
+                        AgentValue::string("x")
+                    ])
+                ]),
+                "next".into() => AgentValue::object(hashmap! {
+                    "headers".into() => AgentValue::array(vector![AgentValue::string("n")]),
+                    "rows".into() => AgentValue::array(vector![
+                        AgentValue::array(vector![AgentValue::integer(2)])
+                    ]),
+                    "next".into() => AgentValue::unit(),
+            }),
+            })
         );
     }
 }

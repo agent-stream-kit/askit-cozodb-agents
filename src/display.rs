@@ -40,8 +40,8 @@ impl AsAgent for DisplayTableAgent {
         _pin: String,
         value: AgentValue,
     ) -> Result<(), AgentError> {
-        let headers = value.get_array("headers").cloned();
-        let rows = value.get_array("rows").cloned();
+        let headers = value.get_array("headers");
+        let rows = value.get_array("rows");
 
         let table_html = generate_html_table(headers, rows);
 
@@ -81,7 +81,10 @@ fn cozo_cell_to_text(value: &AgentValue) -> String {
     }
 }
 
-fn generate_html_table(headers: Option<Vec<AgentValue>>, rows: Option<Vec<AgentValue>>) -> String {
+fn generate_html_table(
+    headers: Option<&im::Vector<AgentValue>>,
+    rows: Option<&im::Vector<AgentValue>>,
+) -> String {
     let mut html = String::new();
     html.push_str("<table border=\"1\" style=\"border-collapse:collapse;\">\n");
     if let Some(headers) = headers {
